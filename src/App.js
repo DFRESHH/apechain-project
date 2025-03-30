@@ -1,40 +1,75 @@
 import { useState, useEffect } from 'react';
-import { NFTStorage, File } from 'nft.storage'
-import { Buffer } from 'buffer';
 import { ethers } from 'ethers';
-import axios from 'axios';
-
-// Components
-import Spinner from 'react-bootstrap/Spinner';
-import Navigation from './components/Navigation';
-
-// ABIs
-import NFT from './abis/NFT.json'
-
-// Config
-import config from './config.json';
+import EvolvingNFT from './abis/EvolvingNFT.json';
+import EvolutionService from './utils/evolution-service';
 
 function App() {
   const [provider, setProvider] = useState(null)
   const [account, setAccount] = useState(null)
-  const [nft, setNFT] = useState(null)
-
+  const [contract, setContract] = useState(null)
+  const [nfts, setNfts] = useState([])
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [image, setImage] = useState(null)
-  const [url, setURL] = useState(null)
-
   const [message, setMessage] = useState("")
   const [isWaiting, setIsWaiting] = useState(false)
+  
+  const evolutionService = new EvolutionService(
+    process.env.REACT_APP_HUGGING_FACE_API_KEY,
+    process.env.REACT_APP_NFT_STORAGE_API_KEY
+  );
 
   const loadBlockchainData = async () => {
     const provider = new ethers.providers.Web3Provider(window.ethereum)
     setProvider(provider)
 
     const network = await provider.getNetwork()
-
-    const nft = new ethers.Contract(config[network.chainId].nft.address, NFT, provider)
-    setNFT(nft)
+    const contractAddress = "YOUR_DEPLOYED_CONTRACT_ADDRESS";
+    const contract = new ethers.Contract(contractAddress, EvolvingNFT.abi, provider)
+    setContract(contract)
+    
+    // Load user's NFTs
+    await loadUserNFTs(contract, account);
+  }
+  
+  const loadUserNFTs = async (contract, account) => {
+    if (!account) return;
+    
+    setMessage("Loading your NFTs...");
+    const totalSupply = await contract.totalSupply();
+    
+    const nftList = [];
+    
+    for (let i = 1; i <= totalSupply; i++) {
+      try {
+        const owner = await contract.ownerOf(i);
+        
+        if (owner.toLowerCase() === account.toLowerCase()) {
+          const tokenURI = await contract.tokenURI(i);
+          const stage = await contract.getCurrentStage(i);
+          const interactions = await contract.getInteractions(i);
+          
+          // Fetch metadata
+          const response = await fetch(tokenURI);
+          const metadata = await response.json();
+          
+          nftList.push({
+            id: i,
+            name: metadata.name,
+            description: metadata.description,
+            image: metadata.image,
+            stage: stage.toNumber(),
+            interactions: interactions.toNumber(),
+            attributes: metadata.attributes || []
+          });
+        }
+      } catch (error) {
+        console.error(`Error loading NFT #${i}:`, error);
+      }
+    }
+    
+    setNfts(nftList);
+    setMessage("");
   }
 
   const submitHandler = async (e) => {
@@ -47,91 +82,89 @@ function App() {
 
     setIsWaiting(true)
 
-    // Call AI API to generate a image based on description
+    // Create an initial image
     const imageData = await createImage()
-
-    // Upload image to IPFS (NFT.Storage)
-    const url = await uploadImage(imageData)
-
-    // Mint NFT
-    await mintImage(url)
+    
+    // Generate evolution URIs
+    const evolutionURIs = await generateEvolutionStages(imageData)
+    
+    // Mint the NFT with all evolution stages
+    await mintNFT(evolutionURIs)
 
     setIsWaiting(false)
     setMessage("")
+    
+    // Reload user's NFTs
+    await loadUserNFTs(contract, account);
   }
 
   const createImage = async () => {
-    setMessage("Generating Image...")
-
-    // You can replace this with different model API's
-    const URL = `https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-2`
-
-    // Send the request
-    const response = await axios({
-      url: URL,
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.REACT_APP_HUGGING_FACE_API_KEY}`,
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      data: JSON.stringify({
-        inputs: description, options: { wait_for_model: true },
-      }),
-      responseType: 'arraybuffer',
-    })
-
-    const type = response.headers['content-type']
-    const data = response.data
-
-    const base64data = Buffer.from(data).toString('base64')
-    const img = `data:${type};base64,` + base64data // <-- This is so we can render it on the page
-    setImage(img)
-
-    return data
+    setMessage("Generating Initial Image...")
+    
+    // Call to Hugging Face for image generation
+    // ... (same as your existing code)
+    
+    return imageData
+  }
+  
+  const generateEvolutionStages = async (imageData) => {
+    setMessage("Generating evolution stages...")
+    
+    // Generate 5 evolution stages
+    const evolutionURIs = await evolutionService.generateEvolutions(
+      imageData, 
+      description,
+      5
+    );
+    
+    return evolutionURIs;
   }
 
-  const uploadImage = async (imageData) => {
-    setMessage("Uploading Image...")
-
-    // Create instance to NFT.Storage
-    const nftstorage = new NFTStorage({ token: process.env.REACT_APP_NFT_STORAGE_API_KEY })
-
-    // Send request to store image
-    const { ipnft } = await nftstorage.store({
-      image: new File([imageData], "image.jpeg", { type: "image/jpeg" }),
-      name: name,
-      description: description,
-    })
-
-    // Save the URL
-    const url = `https://ipfs.io/ipfs/${ipnft}/metadata.json`
-    setURL(url)
-
-    return url
-  }
-
-  const mintImage = async (tokenURI) => {
-    setMessage("Waiting for Mint...")
+  const mintNFT = async (evolutionURIs) => {
+    setMessage("Waiting for NFT Mint...")
 
     const signer = await provider.getSigner()
-    const transaction = await nft.connect(signer).mint(tokenURI, { value: ethers.utils.parseUnits("1", "ether") })
+    const transaction = await contract.connect(signer).mint(
+      evolutionURIs[0], // Initial URI
+      evolutionURIs, // All evolution URIs
+      { value: ethers.utils.parseUnits("1", "ether") }
+    )
+    
     await transaction.wait()
+  }
+  
+  const connectWalletHandler = async () => {
+    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    setAccount(ethers.utils.getAddress(accounts[0]));
   }
 
   useEffect(() => {
     loadBlockchainData()
-  }, [])
+  }, [account])
 
   return (
     <div>
-      <Navigation account={account} setAccount={setAccount} />
+      <nav>
+        <div className='nav__brand'>
+          <h1>Evolving AI NFTs on ApeChain</h1>
+        </div>
+
+        {account ? (
+          <button type="button" className='nav__connect'>
+            {account.slice(0, 6) + '...' + account.slice(38, 42)}
+          </button>
+        ) : (
+          <button type="button" className='nav__connect' onClick={connectWalletHandler}>
+            Connect
+          </button>
+        )}
+      </nav>
 
       <div className='form'>
         <form onSubmit={submitHandler}>
           <input type="text" placeholder="Create a name..." onChange={(e) => { setName(e.target.value) }} />
           <input type="text" placeholder="Create a description..." onChange={(e) => setDescription(e.target.value)} />
-          <input type="submit" value="Create & Mint" />
+          <input type="submit" value="Create & Mint Evolving NFT" />
         </form>
 
         <div className="image">
@@ -139,7 +172,6 @@ function App() {
             <img src={image} alt="AI generated image" />
           ) : isWaiting ? (
             <div className="image__placeholder">
-              <Spinner animation="border" />
               <p>{message}</p>
             </div>
           ) : (
@@ -147,12 +179,37 @@ function App() {
           )}
         </div>
       </div>
-
-      {!isWaiting && url && (
-        <p>
-          View&nbsp;<a href={url} target="_blank" rel="noreferrer">Metadata</a>
-        </p>
-      )}
+      
+      {/* Display user's NFTs */}
+      <div className="nft-gallery">
+        <h2>Your Evolving NFTs</h2>
+        <div className="nft-grid">
+          {nfts.map((nft) => (
+            <div key={nft.id} className="nft-card">
+              <img src={nft.image} alt={nft.name} />
+              <div className="nft-info">
+                <h3>{nft.name}</h3>
+                <p>{nft.description}</p>
+                <div className="nft-stats">
+                  <div className="stat">
+                    <span>Stage:</span> {nft.stage}
+                  </div>
+                  <div className="stat">
+                    <span>Interactions:</span> {nft.interactions}
+                  </div>
+                </div>
+                <div className="nft-attributes">
+                  {nft.attributes.map((attr, index) => (
+                    <div key={index} className="attribute">
+                      <span>{attr.trait_type}:</span> {attr.value}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

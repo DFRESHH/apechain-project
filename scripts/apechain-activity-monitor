@@ -1,0 +1,79 @@
+const ethers = require('ethers');
+const EvolvingNFTContract = require('./artifacts/contracts/EvolvingNFT.sol/EvolvingNFT.json');
+
+class ApeChainActivityMonitor {
+  constructor(provider, contractAddress) {
+    this.provider = new ethers.providers.JsonRpcProvider(provider);
+    this.contract = new ethers.Contract(
+      contractAddress,
+      EvolvingNFTContract.abi,
+      this.provider
+    );
+  }
+  
+  async startMonitoring() {
+    console.log("Starting to monitor ApeChain activity...");
+    
+    // Listen for relevant events on ApeChain
+    this.provider.on('block', async (blockNumber) => {
+      console.log(`New block: ${blockNumber}`);
+      await this.processBlock(blockNumber);
+    });
+  }
+  
+  async processBlock(blockNumber) {
+    try {
+      const block = await this.provider.getBlock(blockNumber, true);
+      
+      // Process all transactions in the block
+      for (const tx of block.transactions) {
+        // Check if the transaction involves any of our NFT owners
+        await this.checkNFTActivity(tx);
+      }
+    } catch (error) {
+      console.error(`Error processing block ${blockNumber}:`, error);
+    }
+  }
+  
+  async checkNFTActivity(transaction) {
+    // Get the current supply of NFTs
+    const totalSupply = await this.contract.totalSupply();
+    
+    // For each NFT, check if the owner is involved in this transaction
+    for (let tokenId = 1; tokenId <= totalSupply; tokenId++) {
+      try {
+        const owner = await this.contract.ownerOf(tokenId);
+        
+        // Check if the transaction involves the NFT owner
+        if (transaction.from.toLowerCase() === owner.toLowerCase() || 
+            transaction.to.toLowerCase() === owner.toLowerCase()) {
+          
+          // Record the interaction
+          await this.recordInteraction(tokenId, owner);
+        }
+      } catch (error) {
+        console.error(`Error checking NFT #${tokenId}:`, error);
+      }
+    }
+  }
+  
+  async recordInteraction(tokenId, owner) {
+    try {
+      // Create a wallet to sign the transaction
+      const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, this.provider);
+      
+      // Connect the contract with the wallet
+      const contractWithSigner = this.contract.connect(wallet);
+      
+      // Record the interaction
+      const tx = await contractWithSigner.recordInteraction(tokenId);
+      await tx.wait();
+      
+      console.log(`Recorded interaction for NFT #${tokenId} owned by ${owner}`);
+    } catch (error) {
+      console.error(`Error recording interaction for NFT #${tokenId}:`, error);
+    }
+  }
+}
+
+module.exports = ApeChainActivityMonitor;
