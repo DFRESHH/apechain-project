@@ -1,19 +1,19 @@
 const hre = require("hardhat");
 
 async function main() {
-  const HelloApe = await hre.ethers.getContractFactory("HelloApe");
-  console.log("Deploying HelloApe...");
-  
-  const helloApe = await HelloApe.deploy();
-  
-  // Wait for the transaction to be mined
-  console.log("Deployment transaction:", helloApe.deploymentTransaction().hash);
-  
-  await helloApe.waitForDeployment();
-  
-  console.log("HelloApe deployed to:", await helloApe.getAddress());
+  const NAME = "AI Generated NFT"
+  const SYMBOL = "AINFT"
+  const COST = ethers.utils.parseUnits("1", "ether") // 1 ETH
+
+  const NFT = await hre.ethers.getContractFactory("NFT")
+  const nft = await NFT.deploy(NAME, SYMBOL, COST)
+  await nft.deployed()
+
+  console.log(`Deployed NFT Contract at: ${nft.address}`)
 }
 
+// We recommend this pattern to be able to use async/await everywhere
+// and properly handle errors.
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
